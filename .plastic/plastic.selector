@@ -1,0 +1,4 @@
+repository "slime_jump/slime_jump@15669611974746@cloud"
+  path "/"
+    br "/main"
+    co "/main"
