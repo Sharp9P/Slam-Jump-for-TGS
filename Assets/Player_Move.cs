@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using System.Collections;
 using System;
+using Unity.VisualScripting;
 
 public class Player_Move : MonoBehaviour
 {
@@ -28,6 +29,7 @@ public class Player_Move : MonoBehaviour
 
     public float timeSuperJump;
     public float speedSuperJump;
+    public float lineSuperJump;// (0 ~ 1)
 
     public enum PlayerStatus
     {
@@ -46,10 +48,15 @@ public class Player_Move : MonoBehaviour
         }
     }
 
+    private Animator animator;
+
+    private Coroutine superJumpCoroutine;
+
     private void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
         lr = GetComponent<LineRenderer>();
+        animator = GetComponent<Animator>();
         status = PlayerStatus.None;
     }
 
@@ -93,39 +100,42 @@ public class Player_Move : MonoBehaviour
         }
     }
 
-    public void TryChangeStatus(PlayerStatus statusChanged)
+    public void GoSuperJump(PlayerStatus statusChanged, Vector3 dir)
     {
         if (status == statusChanged) return;//同じ状態の重複切り替え禁止
         if (status == PlayerStatus.SuperJump && statusChanged != PlayerStatus.None) return;//起死回生ジャンプからデフォルト状態のみ切り替えられる
 
+        Time.timeScale = 1f;
+        Time.fixedDeltaTime = defaultFixedDeltaTime;
+
         status = statusChanged;
         //onStatusChange?.Invoke(statusChanged);
 
-        if (status == PlayerStatus.SuperJump)
-        {
-            StartCoroutine(SuperJump(timeSuperJump));
-        }
+        superJumpCoroutine = StartCoroutine(SuperJump(dir, timeSuperJump));
     }
 
     private void NoneRender()
     {
-        if (Mouse.current.leftButton.wasPressedThisFrame)
+        animator.SetFloat("VerticalSpeed", rb.linearVelocityY);
+
+        if (Mouse.current.leftButton.wasPressedThisFrame && IsClickOnControllable())
         {
             pressStartedInPlay = true;
+            isPressed = true;
+
+            animator.SetTrigger("wasPressed");
             unholdMousePos = Mouse.current.position.ReadValue();
         }
 
         if (!pressStartedInPlay) return;//他シーンからのファントム入力防止
 
-        if (Mouse.current.leftButton.isPressed)
+        if (isPressed && Mouse.current.leftButton.isPressed)
         {
             onholdMousePos = Mouse.current.position.ReadValue();
 
             //極小操作は無視する
             if ((unholdMousePos - onholdMousePos).sqrMagnitude < 1f) return;
             //
-
-            isPressed = true;
 
             lr.enabled = true;
             Vector3 dir = (unholdMousePos - onholdMousePos).normalized;
@@ -143,24 +153,32 @@ public class Player_Move : MonoBehaviour
             aimHead.transform.position = transform.position + dir * length;
             aimHead.transform.rotation = Quaternion.FromToRotation(Vector3.up, dir);
         }
-        else
-        {
-            isPressed = false;
-        }
 
-        if (Mouse.current.leftButton.wasReleasedThisFrame)
+        if (isPressed && Mouse.current.leftButton.wasReleasedThisFrame)
         {
             lr.enabled = false;
             aimHead.SetActive(false);
+            animator.SetTrigger("wasReleased");
 
             releaseMousePos = Mouse.current.position.ReadValue();
 
             //極小操作は無視する
-            if ((unholdMousePos - releaseMousePos).sqrMagnitude < 1f) return;
+            if ((unholdMousePos - releaseMousePos).sqrMagnitude < 1f)
+            {
+                isPressed = false;
+                pressStartedInPlay = false;
+                return;
+            }
             //
 
             Vector3 dir = (unholdMousePos - releaseMousePos).normalized;
             float force = (unholdMousePos - releaseMousePos).magnitude;
+
+            if (unholdMousePos.y < Screen.height * lineSuperJump)
+            {
+                GoSuperJump(PlayerStatus.SuperJump, dir);
+            }
+
 
             //解像度違っても同じ操作感保つための機能
             float charge01 = Mathf.Clamp01(force / (Screen.height * maxDragPercentage));
@@ -169,6 +187,8 @@ public class Player_Move : MonoBehaviour
 
             pendingVelocity = dir * speed;
             launched = true;
+            isPressed = false;
+            pressStartedInPlay = false;
         }
     }
 
@@ -206,18 +226,57 @@ public class Player_Move : MonoBehaviour
         //何もない
     }
 
-    private IEnumerator SuperJump(float duration)
+    private IEnumerator SuperJump(Vector3 dir, float duration)
     {
         float timer = 0f;
 
+        animator.SetTrigger("isSuperJumping");
+
         while (timer < duration)
         {
-            rb.linearVelocity = new Vector2(0, speedSuperJump);
+            rb.linearVelocity = dir * speedSuperJump;
 
             timer += Time.fixedDeltaTime;
             yield return new WaitForFixedUpdate();
         }
 
-        TryChangeStatus(PlayerStatus.None);
+        EndSuperJump();
+    }
+    private bool IsClickOnControllable()
+    {
+        Vector2 mouseWorldPos = Camera.main.ScreenToWorldPoint(Mouse.current.position.ReadValue());
+
+        return Physics2D.OverlapPoint(mouseWorldPos, LayerMask.GetMask("Clickable")) != null;
+    }
+
+    void OnCollisionEnter2D(Collision2D collision)
+    {
+        if (status == PlayerStatus.SuperJump)
+        {
+            if (collision.gameObject.CompareTag("Wall"))
+            {
+                rb.linearVelocity = Vector2.zero;
+                EndSuperJump();
+            }
+            else
+            {
+                Destroy(collision.gameObject);
+            }
+        }
+    }
+
+    private void EndSuperJump()
+    {
+        if (status != PlayerStatus.SuperJump) return;
+
+        animator.SetTrigger("finishSuperJumping");
+
+        status = PlayerStatus.None;
+
+        if (superJumpCoroutine != null)
+        {
+            StopCoroutine(superJumpCoroutine);
+            superJumpCoroutine = null;
+        }
     }
 }
