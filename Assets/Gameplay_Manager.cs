@@ -30,7 +30,7 @@ public class Gameplay_Manager : MonoBehaviour
     {
         if (!player.IsInvincible)
         {
-            Debug.Log("Score :" + score);
+            GameResultData.Instance.finalScore = score;
             SceneManager.LoadScene("GameoverScene");
         }
     }
